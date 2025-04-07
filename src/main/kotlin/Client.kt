@@ -3,28 +3,7 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
-
-const val SERVER_URL = "http://127.0.0.1:8080"
-const val OUTPUT_FILE = "downloaded.bin"
-const val CHUNK_SIZE = 512
-
-fun sha256(bytes: ByteArray): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-    return digest.digest(bytes).joinToString("") { "%02x".format(it) }
-}
-
-//fun sha256(filePath: String): String {
-//    val digest = MessageDigest.getInstance("SHA-256")
-//    File(filePath).inputStream().use { input ->
-//        val buffer = ByteArray(8192)
-//        var read = input.read(buffer)
-//        while (read != -1) {
-//            digest.update(buffer, 0, read)
-//            read = input.read(buffer)
-//        }
-//    }
-//    return digest.digest().joinToString("") { "%02x".format(it) }
-//}
+import kotlin.system.exitProcess
 
 fun sha256(filePath: String): String {
     val digest = MessageDigest.getInstance("SHA-256")
@@ -37,20 +16,51 @@ fun sha256(filePath: String): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-fun main(args: Array<String>) {
+fun printHelp() {
+    println(
+        """
+        Options:
+          --url=URL            The server URL to download from (default: http://127.0.0.1:8080)
+          --output=FILE        The output file name (default: downloaded.bin)
+          --chunk-size=KB      Chunk size in kilobytes (default: 1024)
+          --help               Show this help message and exit
+        """.trimIndent()
+    )
+}
 
-    val connection = URL(SERVER_URL).openConnection() as HttpURLConnection
+fun parseArgs(args: Array<String>): Map<String, String> {
+    if (args.any { it == "--help" }) {
+        printHelp()
+        exitProcess(0)
+    }
+
+    return args.mapNotNull {
+        val split = it.split("=", limit = 2)
+        if (split.size == 2 && split[0].startsWith("--")) {
+            split[0].removePrefix("--") to split[1]
+        } else null
+    }.toMap()
+}
+
+fun main(args: Array<String>) {
+    val parsedArgs = parseArgs(args)
+    val serverURL = parsedArgs["url"] ?: "http://127.0.0.1:8080"
+    val outputFileName = parsedArgs["output"] ?: "downloaded.bin"
+    val chunkSize = parsedArgs["chunk-size"]?.toIntOrNull() ?: 1024
+
+    println("Using server: $serverURL")
+    println("Output file: $outputFileName")
+    println("Chunk size: $chunkSize KB\n")
+
+    val connection = URL(serverURL).openConnection() as HttpURLConnection
     connection.requestMethod = "GET"
     connection.inputStream.use { it.readBytes() }
     val totalLength = connection.getHeaderField("Content-Length")?.toIntOrNull()
         ?: throw RuntimeException("Invalid content length")
 
-//    println(String.format("Data size:%20.2f Kb", totalLength/1024.0))
-
-//    val data = ByteArray(totalLength)
     val downloaded = BooleanArray(totalLength)
     var receivedBytes = 0
-    val outputFile = RandomAccessFile(File(OUTPUT_FILE), "rw")
+    val outputFile = RandomAccessFile(File(outputFileName), "rw")
     outputFile.setLength(totalLength.toLong())
 
     while (true) {
@@ -58,12 +68,12 @@ fun main(args: Array<String>) {
         if (start == -1) break
 
         var end = start
-        while (end < totalLength && !downloaded[end] && end - start < CHUNK_SIZE * 1024) {
+        while (end < totalLength && !downloaded[end] && end - start < chunkSize * 1024) {
             end++
         }
 
         val rangeHeader = "bytes=$start-$end"
-        val conn = URL(SERVER_URL).openConnection() as HttpURLConnection
+        val conn = URL(serverURL).openConnection() as HttpURLConnection
         conn.setRequestProperty("Range", rangeHeader)
         conn.connect()
 
@@ -76,7 +86,6 @@ fun main(args: Array<String>) {
         for (i in received.indices) {
             val idx = start + i
             if (idx < totalLength) {
-//                data[idx] = received[i]
                 downloaded[idx] = true
             }
         }
@@ -92,6 +101,5 @@ fun main(args: Array<String>) {
     }
 
     println("\nDone!")
-//    println("SHA-256: ${sha256(data)}")
-    println("SHA-256: ${sha256(OUTPUT_FILE)}")
+    println("SHA-256: ${sha256(outputFileName)}")
 }
