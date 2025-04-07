@@ -1,17 +1,42 @@
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.UnknownHostException
 import java.security.MessageDigest
 import kotlin.system.exitProcess
+
+const val DEFAULT_URL = "http://127.0.0.1:8080"
+const val DEFAULT_OUTPUT = "downloaded.bin"
+const val DEFAULT_CHUNK_SIZE_KB = 1024
+
+fun main(args: Array<String>) {
+    val parsedArgs = parseArgs(args)
+    val serverURL = parsedArgs["url"] ?: DEFAULT_URL
+    val outputFileName = parsedArgs["output"] ?: DEFAULT_OUTPUT
+    val chunkSizeKB = parsedArgs["chunk-size"]?.toIntOrNull() ?: DEFAULT_CHUNK_SIZE_KB
+
+    println("Using server: $serverURL")
+    println("Output file: $outputFileName")
+    println("Chunk size: $chunkSizeKB KB\n")
+
+    val contentLength = getContentLength(serverURL) ?: return
+
+    downloadFile(serverURL, outputFileName, chunkSizeKB, contentLength)
+
+    println("\nDownload complete.")
+    println("SHA-256: ${sha256(outputFileName)}")
+}
 
 fun sha256(filePath: String): String {
     val digest = MessageDigest.getInstance("SHA-256")
     val buffer = ByteArray(8192)
-    val input = File(filePath).inputStream()
-    var read: Int
-    while (input.read(buffer).also { read = it } != -1) {
-        digest.update(buffer, 0, read)
+    File(filePath).inputStream().use { input ->
+        var read: Int
+        while (input.read(buffer).also { read = it } != -1) {
+            digest.update(buffer, 0, read)
+        }
     }
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
@@ -20,16 +45,16 @@ fun printHelp() {
     println(
         """
         Options:
-          --url=URL            The server URL to download from (default: http://127.0.0.1:8080)
-          --output=FILE        The output file name (default: downloaded.bin)
-          --chunk-size=KB      Chunk size in kilobytes (default: 1024)
-          --help               Show this help message and exit
+          --url=URL            The server URL to download from (default: $DEFAULT_URL)
+          --output=FILE        The output file name (default: $DEFAULT_OUTPUT)
+          --chunk-size=KB      Chunk size in kilobytes (default: $DEFAULT_CHUNK_SIZE_KB)
+          --help               Show this help message
         """.trimIndent()
     )
 }
 
 fun parseArgs(args: Array<String>): Map<String, String> {
-    if (args.any { it == "--help" }) {
+    if (args.contains("--help")) {
         printHelp()
         exitProcess(0)
     }
@@ -42,64 +67,64 @@ fun parseArgs(args: Array<String>): Map<String, String> {
     }.toMap()
 }
 
-fun main(args: Array<String>) {
-    val parsedArgs = parseArgs(args)
-    val serverURL = parsedArgs["url"] ?: "http://127.0.0.1:8080"
-    val outputFileName = parsedArgs["output"] ?: "downloaded.bin"
-    val chunkSize = parsedArgs["chunk-size"]?.toIntOrNull() ?: 1024
+fun getContentLength(serverURL: String): Int? {
+    return try {
+        val connection = URL(serverURL).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connect()
 
-    println("Using server: $serverURL")
-    println("Output file: $outputFileName")
-    println("Chunk size: $chunkSize KB\n")
-
-    val connection = URL(serverURL).openConnection() as HttpURLConnection
-    connection.requestMethod = "GET"
-    connection.inputStream.use { it.readBytes() }
-    val totalLength = connection.getHeaderField("Content-Length")?.toIntOrNull()
-        ?: throw RuntimeException("Invalid content length")
-
-    val downloaded = BooleanArray(totalLength)
-    var receivedBytes = 0
-    val outputFile = RandomAccessFile(File(outputFileName), "rw")
-    outputFile.setLength(totalLength.toLong())
-
-    while (true) {
-        val start = downloaded.indexOfFirst { !it }
-        if (start == -1) break
-
-        var end = start
-        while (end < totalLength && !downloaded[end] && end - start < chunkSize * 1024) {
-            end++
-        }
-
-        val rangeHeader = "bytes=$start-$end"
-        val conn = URL(serverURL).openConnection() as HttpURLConnection
-        conn.setRequestProperty("Range", rangeHeader)
-        conn.connect()
-
-        if (conn.responseCode != 206 && conn.responseCode != 200) {
-            println("Server error: ${conn.responseCode}")
-            continue
-        }
-
-        val received = conn.inputStream.readBytes()
-        for (i in received.indices) {
-            val idx = start + i
-            if (idx < totalLength) {
-                downloaded[idx] = true
+        when (connection.responseCode) {
+            200, 206 -> connection.getHeaderField("Content-Length")?.toIntOrNull()
+            else -> {
+                println("Server error: ${connection.responseCode}")
+                null
             }
         }
-        outputFile.write(received)
+    } catch (e: UnknownHostException) {
+        println("Server not found: ${e.message}")
+        null
+    } catch (e: IOException) {
+        println("Could not connect to server: ${e.message}")
+        null
+    } catch (e: Exception) {
+        println("Unexpected error: ${e.message}")
+        null
+    }
+}
 
-        receivedBytes += received.size
+fun downloadFile(
+    serverURL: String,
+    outputFileName: String,
+    chunkSizeKB: Int,
+    totalSize: Int
+) {
+    var receivedBytes = 0
+    val chunkSize = chunkSizeKB * 1024
+    val outputFile = RandomAccessFile(outputFileName, "rw")
+    outputFile.setLength(totalSize.toLong())
 
-        val percent = receivedBytes / totalLength.toFloat() * 100.0
-        val receivedKB = received.size / 1024.0
-        val totalKB = totalLength / 1024.0
+    while (receivedBytes < totalSize) {
+        val end = (receivedBytes + chunkSize).coerceAtMost(totalSize)
+        val rangeHeader = "bytes=$receivedBytes-$end"
 
-        println(String.format("%-7.2fKb / %-7.2fKb\t%.2f %%", receivedKB, totalKB, percent))
+        try {
+            val conn = URL(serverURL).openConnection() as HttpURLConnection
+            conn.setRequestProperty("Range", rangeHeader)
+            conn.connect()
+
+            val chunk = conn.inputStream.use { it.readBytes() }
+            outputFile.seek(receivedBytes.toLong())
+            outputFile.write(chunk)
+
+            receivedBytes += chunk.size
+
+            val percent = receivedBytes / totalSize.toFloat() * 100
+            println(String.format("%.2f%%\t(%.2f / %.2f KB)", percent, receivedBytes / 1024.0, totalSize / 1024.0))
+        } catch (e: Exception) {
+            println("Error downloading chunk [$rangeHeader]: ${e.message}")
+            break
+        }
     }
 
-    println("\nDone!")
-    println("SHA-256: ${sha256(outputFileName)}")
+    outputFile.close()
 }
