@@ -29,69 +29,6 @@ fun main(args: Array<String>) {
     println("SHA-256: ${sha256(outputFileName)}")
 }
 
-fun sha256(filePath: String): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-    val buffer = ByteArray(8192)
-    File(filePath).inputStream().use { input ->
-        var read: Int
-        while (input.read(buffer).also { read = it } != -1) {
-            digest.update(buffer, 0, read)
-        }
-    }
-    return digest.digest().joinToString("") { "%02x".format(it) }
-}
-
-fun printHelp() {
-    println(
-        """
-        Options:
-          --url=URL            The server URL to download from (default: $DEFAULT_URL)
-          --output=FILE        The output file name (default: $DEFAULT_OUTPUT)
-          --chunk-size=KB      Chunk size in kilobytes (default: $DEFAULT_CHUNK_SIZE_KB)
-          --help               Show this help message
-        """.trimIndent()
-    )
-}
-
-fun parseArgs(args: Array<String>): Map<String, String> {
-    if (args.contains("--help")) {
-        printHelp()
-        exitProcess(0)
-    }
-
-    return args.mapNotNull {
-        val split = it.split("=", limit = 2)
-        if (split.size == 2 && split[0].startsWith("--")) {
-            split[0].removePrefix("--") to split[1]
-        } else null
-    }.toMap()
-}
-
-fun getContentLength(serverURL: String): Int? {
-    return try {
-        val connection = URL(serverURL).openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.connect()
-
-        when (connection.responseCode) {
-            200, 206 -> connection.getHeaderField("Content-Length")?.toIntOrNull()
-            else -> {
-                println("Server error: ${connection.responseCode}")
-                null
-            }
-        }
-    } catch (e: UnknownHostException) {
-        println("Server not found: ${e.message}")
-        null
-    } catch (e: IOException) {
-        println("Could not connect to server: ${e.message}")
-        null
-    } catch (e: Exception) {
-        println("Unexpected error: ${e.message}")
-        null
-    }
-}
-
 fun downloadFile(
     serverURL: String,
     outputFileName: String,
@@ -127,4 +64,67 @@ fun downloadFile(
     }
 
     outputFile.close()
+}
+
+fun getContentLength(serverURL: String): Int? {
+    return try {
+        val connection = URL(serverURL).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connect()
+
+        when (connection.responseCode) {
+            200, 206 -> connection.getHeaderField("Content-Length")?.toIntOrNull()
+            else -> {
+                println("Server error: ${connection.responseCode}")
+                null
+            }
+        }
+    } catch (e: UnknownHostException) {
+        println("Server not found: ${e.message}")
+        null
+    } catch (e: IOException) {
+        println("Could not connect to server: ${e.message}")
+        null
+    } catch (e: Exception) {
+        println("Unexpected error: ${e.message}")
+        null
+    }
+}
+
+fun sha256(filePath: String): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(8192)
+    File(filePath).inputStream().use { input ->
+        var read: Int
+        while (input.read(buffer).also { read = it } != -1) {
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+fun parseArgs(args: Array<String>): Map<String, String> {
+    if (args.contains("--help")) {
+        printHelp()
+        exitProcess(0)
+    }
+
+    return args.mapNotNull {
+        val split = it.split("=", limit = 2)
+        if (split.size == 2 && split[0].startsWith("--")) {
+            split[0].removePrefix("--") to split[1]
+        } else null
+    }.toMap()
+}
+
+fun printHelp() {
+    println(
+        """
+        Options:
+          --url=URL            The server URL to download from (default: $DEFAULT_URL)
+          --output=FILE        The output file name (default: $DEFAULT_OUTPUT)
+          --chunk-size=KB      Chunk size in kilobytes (default: $DEFAULT_CHUNK_SIZE_KB)
+          --help               Show this help message
+        """.trimIndent()
+    )
 }
